@@ -4,7 +4,7 @@ import time
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 import os
-import json # JSON 데이터를 처리하기 위해 추가
+from app.db.influxdb import write_csi_data_to_influxdb, influxdb_client
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -21,18 +21,7 @@ INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN")  # <-- 여기에 실제 토큰을 �
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET")
 
-# InfluxDB 클라이언트 초기화
-try:
-    influxdb_client = InfluxDBClient(
-        url=INFLUXDB_URL,
-        token=INFLUXDB_TOKEN,
-        org=INFLUXDB_ORG
-    )
-    write_api = influxdb_client.write_api(write_options=SYNCHRONOUS)
-    logger.info("✅ InfluxDB 클라이언트 초기화 성공.")
-except Exception as e:
-    logger.error(f"❌ InfluxDB 클라이언트 초기화 실패: {e}")
-    exit()
+
 
 # MQTT 클라이언트 인스턴스 생성
 mqtt_client = mqtt.Client()
@@ -46,17 +35,18 @@ def on_connect(client, userdata, flags, rc):
         logger.error(f"❌ 연결 실패, 반환 코드: {rc}")
 
 def on_message(client, userdata, msg):
+    """
+    MQTT 토픽에 메시지가 들어왔을 때 호출되는 콜백 함수
+    데이터 파싱 후, InfluxDB 저장 함수를 호출합니다.
+    """
     try:
         data_str = msg.payload.decode("utf-8")
         logger.info(f"✅ 메시지 수신: {data_str}")
         
-        # 데이터 파싱
-        # 데이터 구조: type,mac,rssi,rate,... "[...]"
+        # 데이터 파싱 로직
         parts = data_str.strip().split(',')
         
-        # CSI 데이터는 마지막에 문자열로 들어오므로,
-        # CSI 데이터 앞까지의 필드를 먼저 파싱합니다.
-        # 인덱스 0부터 12까지의 필드를 파싱하고, 나머지를 CSI_DATA로 처리합니다.
+        # ... 파싱 로직은 동일
         parsed_data = {
             "type": parts[0],
             "mac": parts[1],
@@ -72,38 +62,18 @@ def on_message(client, userdata, msg):
             "real_time_timestamp_us": int(parts[11]),
         }
         
-        # CSI 데이터는 문자열 형태로 추출합니다.
         csi_data_start_index = data_str.find('"[')
-        csi_data_end_index = data_str.rfind(']"') + 2 # ']"'까지 포함
+        csi_data_end_index = data_str.rfind(']"') + 2
         csi_data_str = data_str[csi_data_start_index:csi_data_end_index]
-
+        
         logger.info(f"➡️ RSSI: {parsed_data['rssi']}, MAC: {parsed_data['mac']}")
         logger.info(f"➡️ CSI_DATA (길이): {len(csi_data_str)}")
 
-        # InfluxDB에 저장할 데이터 포인트 생성
-        point = Point("csi_measurement") \
-            .tag("type", parsed_data["type"]) \
-            .tag("mac", parsed_data["mac"]) \
-            .tag("device_id", "esp32-device-01") \
-            .field("rssi", parsed_data["rssi"]) \
-            .field("rate", parsed_data["rate"]) \
-            .field("sig_mode", parsed_data["sig_mode"]) \
-            .field("mcs", parsed_data["mcs"]) \
-            .field("ch_width", parsed_data["ch_width"]) \
-            .field("secondary_channel", parsed_data["secondary_channel"]) \
-            .field("local_timestamp", parsed_data["local_timestamp"]) \
-            .field("remote_timestamp", parsed_data["remote_timestamp"]) \
-            .field("rx_state", parsed_data["rx_state"]) \
-            .field("real_time_timestamp", parsed_data["real_time_timestamp"]) \
-            .field("real_time_timestamp_us", parsed_data["real_time_timestamp_us"]) \
-            .field("csi_data_raw", csi_data_str) # CSI 데이터 전체를 문자열로 저장
+        # 분리된 함수를 호출하여 InfluxDB에 데이터를 저장합니다.
+        write_csi_data_to_influxdb(parsed_data, csi_data_str)
 
-        # InfluxDB에 데이터 쓰기
-        write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
-        logger.info("➡️ InfluxDB에 데이터 포인트가 성공적으로 저장되었습니다.")
-
-    except (IndexError, ValueError, json.JSONDecodeError) as e:
-        logger.error(f"❌ 데이터 파싱 또는 저장 실패: {e}")
+    except (IndexError, ValueError) as e:
+        logger.error(f"❌ 데이터 파싱 실패: {e}")
     except Exception as e:
         logger.error(f"❌ 예기치 않은 오류 발생: {e}")
 
