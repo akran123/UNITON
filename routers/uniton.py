@@ -1,8 +1,8 @@
 from fastapi import APIRouter,Depends,Query, HTTPException
-from models.user import Guardian, ProtectedPerson
+from app.models.user import Guardian, ProtectedPerson
 from sqlalchemy.orm import Session
-from database import get_db
-from schemas.user import GuardianBase,ProtectedPersonBase
+from app.db.database import get_db
+from app.schemas.user import GuardianBase,ProtectedPersonBase
 
 router = APIRouter(prefix="/user",tags=["users"])
 
@@ -30,3 +30,5 @@ def create_protectedPerson(guardian_id :int,protectedperson_data : ProtectedPers
     db.commit()
     db.refresh(new_data)
     return new_data
+
+
